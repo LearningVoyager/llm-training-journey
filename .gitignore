@@ -1,0 +1,31 @@
+# Large model files
+*.pt
+*.pth
+checkpoints/
+
+# Data files
+data/
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs (until ready to commit)
+*.log
+
+# Temporary
+tmp/
+temp/
