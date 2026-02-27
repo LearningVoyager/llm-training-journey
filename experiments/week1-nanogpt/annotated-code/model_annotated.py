@@ -6,3 +6,22 @@ Everything: Everything — attention, MLP, residuals, LayerNorm — is just
             machinery in service of that one goal. Keep coming back to it.
 """
 
+
+# Import the necessary class libraries
+
+class LayerNorm(nn.Module):
+    """ LayerNorm with optional bias. PyTorch doesn't support simply bias = False"""
+
+
+
+class CausalSelfAttention(nn.Module):
+
+class MLP(nn.Module):
+
+class Block(nn.Module):
+
+
+class GPTConfig:
+
+class GPT(nn.Module):
+
