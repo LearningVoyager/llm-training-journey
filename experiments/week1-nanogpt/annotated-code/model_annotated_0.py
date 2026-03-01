@@ -240,7 +240,7 @@ def __init__(self, config):
         # softmax → probabilities
         #     ↓
         # highest probability = predicted next token
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+    self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
 
         # ================================================================
@@ -271,7 +271,7 @@ def __init__(self, config):
         #
         # When training updates wte, lm_head automatically updates too.
         # They are literally the same numbers in the same memory location.
-        self.transformer.wte.weight = self.lm_head.weight
+    self.transformer.wte.weight = self.lm_head.weight
 
 
         # ================================================================
@@ -291,7 +291,7 @@ def __init__(self, config):
         # known to work well for transformer training. Not too large
         # (causes exploding gradients) and not too small (causes vanishing
         # gradients). This is the GPT-2 paper's recommended starting point.
-        self.apply(self._init_weights)  # single underscore, not double
+    self.apply(self._init_weights)  # single underscore, not double
 
 
         # ================================================================
@@ -317,9 +317,9 @@ def __init__(self, config):
         # The 2× is because each block has 2 residual additions (attn + mlp)
         # More layers = smaller denominator = smaller initial weights
         # = accumulation stays controlled throughout training
-        for pn, p in self.named_parameters():
-            if pn.endswith('c_proj.weight'):
-                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+    for pn, p in self.named_parameters():
+        if pn.endswith('c_proj.weight'):
+            torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
 
         # ================================================================
@@ -331,7 +331,7 @@ def __init__(self, config):
         # For GPT-2 this should print ~124.44M.
         # If you see a wildly different number, something went wrong
         # in your architecture — catch it here before training for hours.
-        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+    print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
 
     def forward(self, idx, targets=None):
@@ -582,20 +582,290 @@ def __init__(self, config):
 
     # Initializes the parameter weights
     def _init_weights(self, module):
+        """
+        High Level Description:Intialize the 
+
+        Inputs:
+            - self:
+            - module:
+        
+        Outputs:
+            - Intialized weights
+        """
+
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean = 0.0, std = 0.02) # Assign normalized weights if module is linear. What does linear mean here?
+            if module.bias is not None: # if Model has bias then
+                torch.nn.init.zeros_(module.bias) # Set bias terms to zero
+        elif isinstance(module, nn.Embedding): # Assign normalized weight for embeddings
+            torch.nn.init.normal_(module.weight, mean = 0.0, std = 0.02)
+
+
+    # Get the number of parameters for the entire model
+    def get_num_parameters(self, non_embedding = True):
+        """
+        Return the number of parameters in the model.
+        For non-embedding count (default), the position embeddings get subtracted.
+        The token embeddings would too, except due to the parameters sharing these
+        params are actually used as weights in the final layer, so we include them.
+
+        # What does the above comments mean for non-embedding count? And the token embedding subtraction with whom?
+
+        Input:
+            - self:
+            - non_embedding: # Are tokens the non-embedding?
+
+        Output:
+            - number of parameters used in the model
+        """
+
+        n_params = sum(p.numel() for p in self.parameters()) # What is this code doing ? numel()?
+
+        if non_embedding:
+            n_params -= self.transformer.wpe.weight.numel() # Why are we doing this? What's the impact
+
+        return n_params
+
+    # Configuring the optimizer
+    def configure_optimizer(self, weight_decay, learning_rate, betas, device_type):
+        """
+        HIGH LEVEL Description:
+
+        Input:
+            - self
+            - weight decay: I think the weights of the model decay with every run if we have this. I don't know why this would be done
+            - learning_rate: Learning rate of the model
+            - betas: I know alpha is the learning rate. I don't know what is betas
+            - device_type: if we have GPU then this would put data on it for computation
+        
+        Output:
+            - Returns the optimizer with the config that we provided during input
+        """
+        # start with all of the candidate parameters
+        param_dict = {pn : p for pn, p in self.named_parameters()} # What does the code represent here and what is happening? # What are named_parameters?
+
+        # filter out those that do not require grad
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad} # I think we are taking only those parameters that we need to update during training
+
+        
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no. # Why? Don't understand this
+        # i.e all weight tensors in matmuls + embedding decay, all biases and layernorms don't. # Why? Dont' understand this
+        decay_params = [ p for n, p in param_dict.items() if p.dim() >= 2] # What's happening here? # What are decay parameters? What's the significance of them?
+        nodecay_params = [ p for n, p in param_dict.items() if p.dim() < 2] # What's happening here ? What are nodecay parameters? What's the significance of them?
+
+        optim_groups = [
+            {'params' : decay_params, 'weight_decay' : weight_decay},
+            {'params' : nodecay_params, 'weight_decay' : 0.0}
+        ]
+
+        num_decay_params = sum(p.numel() for p in decay_params) # What is happening here? # Are we counting all the decay params?
+        num_nodecay_params = sum(p.numel() for p in nodecay_params) # Are we counting nodecay params here?
+
+        print(f"num decayed parameters tensors: {len(decay_params)}, with {num_decay_params : ,} parameters")
+        print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params : ,} parameters")
+
+        # Create AdamW Optimizer and use the fused version if it is available #What is the fused version here? What's the significance and impact?
+        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters # What's happening here? I am guessing it's checking for fused thing?
+        use_fused = fused_available and device_type == 'cuda' # Need to add apple silicon here as well?
+        extra_args = dict(fused = True) if use_fused else dict() # What is this line doing?
+        
+        # Assign the AdamW optimizer
+        optimizer = torch.optimz.AdamW(optim_groups, lr = learning_rate, betas = betas, **extra_args) #What is betas here? Why **extra_agrs?
+
+        print(f"using fused AdamW: {use_fused}")
+
+        return optimizer
         
 
+    # What's the significance of crop_block_size()
+    def crop_block_size(self, block_size):
+        """
+        High Level Description: How do we strink the model? 
 
-    def get_num_parameters():
+        Input:
+            - block_size: Length of the input sequence
+        
+        Output:
+            - 
+        """
 
-    def configure_optimizer():
+        # model surgery to decrease the block sizes if necessary
+        # e.g we may load the GPT2 pretrained model checkpoint (block size 1024)
+        # but want to use a smaller block size for some smaller, simpler model
 
-    def crop_block_size():
+        assert block_size <= self.config.block_size # If the block size of the model or pretrained model is less than or equal to the block_size of our GPT config file that we provide # if it then we don't need to use this I guess
 
-    def from_pretrained():
+        self.config.block_size = block_size # Assign the block_size that we provide this function as input and replace the config that we provided originally
+        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[: block_size]) # What are we doing here? # Are we changing the dimensions of weights based on the new block size?
+
+        # What's happening in the loop below
+        for block in self.transformer.h: # For each of our Transformer Blocks
+            if hasattr(block.attn, 'bias'): # What's happening here 
+                block.attn.bias = block.attn.bias[ :, :, : block_size, : block_size] # What's happening here?
+
+        
+
+    @classmethod # What is this line doing?
+    def from_pretrained(cls, model_type, override_args = None): # What's the significance of this?
+        """
+        HIGH LEVEL DESCRIPTION: How do we load GPT 2 weights
+
+        INPUT:
+            - model_type : 
+            - override_args : # What is this
+
+        OUTPUT:
+            - model
+        """
+
+        assert model_type in {'gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'} # Assert if there is any other model apart from the ones mentioned here
+
+        override_args = override_args or {} # default to empty dict # What does this do? What's the significance?
+        
+        # only dropout can be overridden see more notes below
+        assert all(k == 'dropout' for k in override_args) # Why?
+
+        from transformers import GPT2LMHeadModel
+        print("loading weights from pretrained gpt : %s" % model_type)
+
+        # n_layer, n_head and n_embd are determined from model_type
+        config_args = {
+            'gpt2' : dict( n_layer = 12, n_head = 12, n_embd = 768 ), # 124M params
+            'gpt2-medium' : dict( n_layer = 12, n_head = 16, n_embd = 1024 ), # 350M params
+            'gpt2-large' : dict( n_layer = 36, n_head = 20, n_embd = 1280), # 774M params
+            'gpt2-xl' : dict(n_layer = 48, n_head = 25, n_embd = 1600) # 1558 params
+        }[model_type] # What is this model type doing here?
+
+        print("forcing vocab_size = 50257, block_size = 1024, bias = True") # Why forcing ? Aren't we changing the parameters to chance based on the model we choose
+
+        config_arg['vocab_size'] = 50257 # always 50257 for GPT model checkpoints
+        config_arg['block_size'] = 1024 # always 1024 for GPT model checkpoints
+        config_arg['bias'] = True # always True for GPT model checkpoints
+
+        # we can override the dropout rate, if desired
+        if 'dropout' in override_args: 
+            print(f"overriding droput rate to {override_args['dropout']}")
+            config_args['dropout'] = override_args['dropout']
+
+        # Create a from-srcatch initialized minGPT model
+        config = GPTConfig(**config_args) #What is this doing?
+        model = GPT(config) #What is this doing?
+        sd = model.state_dict() #What is this doing?
+        sd_keys = sd.keys() #What is this doing?
+        sd_keys = [k for k in sd_keys if not k.endswith('.attn.bias')] # discard this mask / buffer, not a param
+
+        # init a huggingface / transformers model 
+        model_hf = GPT2LMHeadModel.from_pretrained(model_type) # What's going on here?
+        sd_hf = model_hf.state_dict() # What's going on here?
+
+        # What is each line doing in the following code?
+        # copy while ensuring all of the parameters are aligned and match in names and shapes
+        sd_keys_hf = sd_hf.keys()
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.masked_bias')] # ignore these, just a buffer
+        sd_keys_hf = [k for k in sd_keys_hf if not k.endswith('.attn.bias')] # same, just the mask (buffer)
+        transposed = ['attn.c_attn.weight', 'attn.c_proj.weight', 'mlp.c_fc.weight', 'mlp.c_proj.weight'] # What's the significance of this?
+
+        # basically the open ai checkpoints use a "Conv1D" module, but we only want to use a vanilla Linear #What's the significance of this ?
+        # this means that we have to transpose these weights when we import them
+        assert len(sd_keys_hf) == len(sd_keys), f"mismatched keys: {len{sd_keys_hf}} != {len(sd_keys)}" #What is this doing
+
+        # What's each line doing of the following loop? Why is it doing it. What's the significance?
+        for k in sd_keys_hf:
+            if any(k.endswith(w) for w in transposed):
+                # special treatment for the Conv1D weights we need to transpose
+                assert sd_hf[k].shape[::-1] == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k].t())
+            else:
+                # vanilla copy over the other parameters
+                assert sd_hf[k].shape == sd[k].shape
+                with torch.no_grad():
+                    sd[k].copy_(sd_hf[k])
+        
+        return model
+
+
+
+
+    # Get's the efficency of GPU utilization
+    def estimated_mfu(self, fwdbwd_per_iter, dt):
+        """
+        Estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS
+
+        INPUT:
+            - fwdbwd_per_iter: forward and backward passes per iterations 
+
+        OUTPUT:
+            -
+        """
+
+        # First estimate the number of flops we do per iteration.
+        # See PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
+
+        N = self.get_num_params() # Store the number of parameters
+        cfg = self.config # What is this doing? How does cfg look like?
+        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd // cfg.n_head, cfg.block_size # What are H, Q, L, T? What is this line doing? I am guessing this assignign layers (tranformer blocks), nubmer of heads, number of embeddings per number of heads, and block size
+
+        flops_per_token = 6*N + 12*L*H*Q*T #WHY?
+        flops_per_fwdbwd = flops_per_token * T # Why?
+        flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter # Why?
+
+
+
+        # Express out flops throughput as ratio of A100 bfloat16 peak flops
+        flops_achieved = flops_per_iter * (1.0/dt) # per second
+        flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
+
+        mfu = flops_achieved / flops_promised # Where do we get the flops promised from if this Apple Silicon? # Will this work for Apple Silicon?
+
+        return mfu
+
+
+class Block(nn.Module):
+    """ 
+    HIGH LEVEL DESCRIPTION: ONE REPEATABLE UNIT OF TRANSFORMER BLOCK
+
+    INPUT:
+        - nn.Module: Inherting things from nn.Module class I guess?
+    OUTPUT: 
+        - 
+    """
+
+    # Intialize the class object
+    def __init__(self, config):
+        super().__init__() # Letting nn.Module do it's setup before we do our setup
+
+        self.ln_1 = LayerNorm(config.n_embd, bias = config.bias) # I think this is setting up Layer Norm
+        
+        self.attn = CausalSelfAttention(config) # providing the Self Attention block with config
+
+        self.ln_2 = LayerNorm(config.n_embd, bias = config.bias) # A Second LayerNorm but why?
+
+        self.mlp = MLP(config) # Providing the config to Multi-Layer Perceptrons
+
+    # Defining the Forward function # Question, How is the forward function different from the forward function in GPT class & causualSelfAttention Class?
+    def forward(self, x):
+        """
+        HIGH LEVEL DESCRIPTION: Forward pass block of the transformer I think
+
+        INPUT:
+            - x: Input/Features/Sequences of tokens
+        OUTPUT: 
+            - 
+        """
+
+        #
+        x = x + self.attn(self.ln_1(x)) # I am guessing this is matrix addition, i.e x and self.attn(self.ln_1(x)) are both matrices and we are adding them # But why are we doing that? And we are passing the layer norm x to the self.attn, why are we doing that too?
+
+        # 
+        x = x + self.mlp(self.ln_2(x)) # Why are we doing this now?  Why ln_2 goes in mlp and not ln1? 
+
+        # Can't we do this in one step by x = x + self.attn(self.ln_1(x)) + self.mlp(self.ln_2(x + self.attn(self.ln_1(x))))
+
+        return x
     
-    def estimated_mfu():
 
-
+    
 
 class LayerNorm(nn.Module):
     """ LayerNorm with optional bias. PyTorch doesn't support simply bias = False"""
@@ -606,6 +876,6 @@ class CausalSelfAttention(nn.Module):
 
 class MLP(nn.Module):
 
-class Block(nn.Module):
+
 
 
