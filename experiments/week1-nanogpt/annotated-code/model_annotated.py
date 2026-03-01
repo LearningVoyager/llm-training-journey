@@ -488,7 +488,61 @@ def __init__(self, config):
 
     return logits, loss
     
+
+    @torch.no_grad() # Decorator that turns of gradient tracking for everything inside this function
     def generate():
+        """ 
+        HIGH LEVEL Description: Generates the output or prediction of next token in the sequence
+
+        Detailed Description: I have not written this Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
+        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+
+        INPUT:
+            - self:
+            - idx : Features that is train dataset
+            - max_new_tokens: how many tokens we need to generate in one go for this function run
+            - temperature = 0.1 # I know this dial helps select the random variability in the predictions of the tokens
+                #What I don't know is that  How it works?
+            - top k: # no idea what this is but if I had to guess I would say that if we had suppose a vocab size of 
+                     # 50204, then there would be 50204 probabilities of the next token that will show up in logits
+                     # we are deciding to output only top 10 or top 20 probabilities
+         """
+        
+        for _ in range(max_new_tokens):
+
+            # if the sequence context is growing too long we must crop it at block_size
+            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[ :, -self.config.block_size:]
+            # I am guessing that idx.size(1) is the lenght of the block size that is the t dimension
+            # I am also guessing that idx[ :, -self.config.block_size:], what is means by -self.config.block_size : is that 
+            # we are taking the length of the sequence from behind till the length of the block size
+
+            # forward the model to get logits for the index in the sequence
+            logits, _ = self(idx_cond) # I am guessing the self, and outputs automatically call forward() here
+
+            # pluck the logits at the final step and scale by desired temperature # What does plucking the logits at final step mean?
+            logits = logits[ :, -1, :] / temperature # What do we mean by final step here? Can I visualize this using a small dataset or matrix
+
+            # optionally crop the logits to only the top k options
+            if top_k is not None:
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1))) # I am guessing v here is the final value that we get
+                logits[logits < v[:, [-1]]] = -float('Inf')
+
+            # Apply softmax to convert logits to (normalized) probabilities
+            probs = F.softmax(logits, dim = -1)
+
+            # Sample from the distribution 
+            idx_next = torch.multinomial(probs, num_samples = 1) # What is happening here? Can we visualize with a small matrix or data example
+
+            # Append sampled index to the running sequence and continue
+            idx = torch.cat((idx, idx_next), dim = 1)
+
+        return idx
+
+        
+
+
+
 
     def _init_weights():
 
