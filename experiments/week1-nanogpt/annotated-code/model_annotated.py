@@ -340,23 +340,23 @@ def __init__(self, config):
 
         Inputs:
             idx     : token IDs of shape (b, t)
-                      b = batch size (how many sequences at once)
-                      t = sequence length (how many tokens per sequence)
-                      These are your input features — the x in y=f(x)
+                    b = batch size (how many sequences at once)
+                    t = sequence length (how many tokens per sequence)
+                    These are your input features — the x in y=f(x)
 
             targets : correct next-token IDs of shape (b, t), or None
-                      When provided (training): model calculates loss
-                      When None (inference/generation): no correct answer
-                      exists yet — just return the prediction, skip loss
+                    When provided (training): model calculates loss
+                    When None (inference/generation): no correct answer
+                    exists yet — just return the prediction, skip loss
 
         Outputs:
             logits  : raw unnormalized scores, shape (b, t, vocab_size)
-                      one score per vocabulary token per position
-                      highest score = model's best guess for next token
-                      NOT yet probabilities — softmax converts them later
+                    one score per vocabulary token per position
+                    highest score = model's best guess for next token
+                    NOT yet probabilities — softmax converts them later
 
             loss    : single number measuring how wrong the predictions were
-                      None during inference (no targets to compare against)
+                    None during inference (no targets to compare against)
         """
 
     device = idx.device  # Grab which device idx lives on (CPU/GPU/MPS)
@@ -488,46 +488,31 @@ def __init__(self, config):
 
     return logits, loss
     
-
-    
-         
-
     def generate():
-        pass
 
     def _init_weights():
-        pass
 
     def get_num_parameters():
-        pass
 
     def configure_optimizer():
-        pass
 
     def crop_block_size():
-        pass
 
     def from_pretrained():
-        pass
     
     def estimated_mfu():
-        pass
 
 
 
 class LayerNorm(nn.Module):
     """ LayerNorm with optional bias. PyTorch doesn't support simply bias = False"""
-    pass
 
 
 
 class CausalSelfAttention(nn.Module):
-    pass
 
 class MLP(nn.Module):
-    pass
 
 class Block(nn.Module):
-    pass
 
 
