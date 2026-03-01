@@ -945,10 +945,10 @@ class CausalSelfAttention(nn.Module):
                 # Manual implementation of attention
                 att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # Why Sqrt here? Is it to normalize the values in a row? # Multiply Query & Key to get What affinities of similarities that will provide info to the tokens about what they are looking for and whether it matches with other tokens keys
                 att = att.masked_fill(self.bias[ :, :, :T, :T] == 0, float('-inf') ) # We are masking the future values here I think so that the tokens don't know what comes next in the sequence
-                att = F.softmax( att, dim = -1) # Masking complete here
+                att = F.softmax( att, dim = -1) # Masking complete here # Why softmax? What's the significance? I am guessing this is converting things into percentage scores for next tokens
                 att = self.attn_dropout(att) # Apply drop out to n number of parameters based on the dropout percentage. This is random while training
 
-                y = att @ v # (B, nh, T, T) # This is the final attention scores
+                y = att @ v # (B, nh, T, T) # This is the final attention scores. Intuitively this tells each tokens 
             
             y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assembe all head outputs side by side # What does this mean? # What is contiguous() and view() do?
             # Why do we need to re-assemble all head outputs side by side
@@ -958,15 +958,51 @@ class CausalSelfAttention(nn.Module):
 
             return y 
 
-
+# This might be the basic building block of multiple neurons in the Deep Learning Network
 class MLP(nn.Module):
+    
+    # Initialized the class object
+    def __init__(self, config):
+        super().__init() # Let nn.Module do it's setup first
 
+        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias = config.bias) # What does this code do? Is this the first layer of the Neural Network? Why are we doing 4 & config.n_embd?
 
+        self.gelu = nn.GELU() # I think we pass the output of middles layers through this
 
+        self.c_proj = nn.Linear( 4 * config.n_embd, config.n_embd, bias = config.bias) # What does this mean? What is this c_proj? What does this intuitively describe?
 
+        self.dropout = nn.Dropout(config.dropout) # provide the config for dropout
+
+    # How is this Forward different from the forward in SelfAttenion(), Block(), and GPT() classes
+    def forward(self, x):
+        
+        # Pass x through first layer
+        x = self.c_fc(x)
+
+        # Pass the new x through Gelu
+        x = self.gelu(x)
+
+        x = self.c_proj(x) # Why this?
+
+        x = self.dropout(x) # apply random dropout
+
+        return x
+    
 
 class LayerNorm(nn.Module):
     """ LayerNorm with optional bias. PyTorch doesn't support simply bias = False"""
+
+    # initialize the class object
+    def __init__(self, ndim, bias): # What is ndim here?
+        super().__init__() # Let nn.Module do it's setup first
+
+        self.weight = nn.Parameter(torch.ones(ndim)) # What is this?
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None # Assign Bias to all the parameters I guess
+
+    
+    # How is the following forward different from all the other forwards or is it related to them?
+    def forward(self, input):
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5) # What does this code do? Go deeper and understand each line?
 
 
 
