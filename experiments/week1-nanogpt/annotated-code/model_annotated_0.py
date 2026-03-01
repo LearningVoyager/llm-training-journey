@@ -865,16 +865,114 @@ class Block(nn.Module):
         return x
     
 
-    
+# This is the core engine of the Transformer Architecture that helps the model learn context about the tokens in terms of their description and position I think
+class CausalSelfAttention(nn.Module):
+    """
+        HIGH LEVEL DESCRIPTION: The block that helps the transformer learn about context
+
+        INPUT:
+            - nn.Module: Inherting things from nn.Module class I guess?
+
+        OUTPUT: 
+            - 
+    """
+
+    # Initialize the class object
+    def __init__(self, config):
+        
+        super().__init__() # Let the nn.Module do its setup first before we do our setup
+
+        assert config.n_embd % config.n_head == 0 # Why we not want any other remainders except 0 for this?
+
+        # key, query, value projections for all heads, but in batch. # NOT described by me
+
+        
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias = config.bias)   # nn.Linear(in_features, out_features) applies the Linear Transformation y = xW' + b
+                                                                                        # Holds a weight matrix of Shape(out_features, in_features) 
+                                                                                        #TO DO LATER: GO Deep into the code and understand what is happening on a matrix level
+
+        
+        # output projection # NOT Desribed by me
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias = config.bias) # What is this doing? Where is c_proj comming from? where is c_attn cominng from?
+
+        # Regularization # Not Described by me
+        # Are we assigning all the configs from different classes below?
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+
+        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0 # Not Described by me
+        # What is flash attention? Why does it make GPU go brrrr? What is brrr
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+
+        if not self.flash:
+            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
+
+            # causal mask to ensure that attention is only applied to the left in the input sequence
+            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size)) # How is each line of code working?
+                                        .view(1, 1, config.block_size, config.block_size))
+
+        # How is this forward method() different than forward method in Block() and GPT() classes?
+        def forward(self, x):
+            """
+                HIGH LEVEL DESCRIPTION: Forward pass block of the Self Attention Block I think
+
+                INPUT:
+                    - x: Input/Features/Sequences of tokens
+                OUTPUT: 
+                    - 
+            """
+
+            B, T, C = x.size() # batch size, token/context_window/block_size of the sequence, C = channels or embedding (n_embd) This is what represent or descrive the tokens
+            
+            # Calculate  query, key, values for all heads in batch and move head forward to be the batch dim # What does moving head forward mean?
+            q, k, v = self.c_attn(x).split(self.n_embd, dim = 2) # what is happening here?, what is c_attn and split() doing here?
+
+            # I guessing we are reshaping the Tensor below. But I don't know why or how?
+            k = k.view( B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs) # What is happening in this code? Go deeper and understand ? What is n_head? and what is head_dim?
+            q = q.view( B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs) # Same comment as above? What is happening here? Go deeper and understand
+            v = v.view( B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs) # Same comment as above? What is happening here? Go deeper and understand
+            
+            # Causal self-attention; Self attend: (B, nh, T, hs) x (B, nh, hs, T) --> (B, nh, T, T) # What is nh, hs here?
+            if self.flash:
+                # efficient attention using Flash Attention CUDA Kernels # What is this? Learn more about it?
+                y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask = None, dropout_p = self.dropout if self.training else 0, is_causal = True)
+
+            else:
+                # Manual implementation of attention
+                att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1))) # Why Sqrt here? Is it to normalize the values in a row? # Multiply Query & Key to get What affinities of similarities that will provide info to the tokens about what they are looking for and whether it matches with other tokens keys
+                att = att.masked_fill(self.bias[ :, :, :T, :T] == 0, float('-inf') ) # We are masking the future values here I think so that the tokens don't know what comes next in the sequence
+                att = F.softmax( att, dim = -1) # Masking complete here
+                att = self.attn_dropout(att) # Apply drop out to n number of parameters based on the dropout percentage. This is random while training
+
+                y = att @ v # (B, nh, T, T) # This is the final attention scores
+            
+            y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assembe all head outputs side by side # What does this mean? # What is contiguous() and view() do?
+            # Why do we need to re-assemble all head outputs side by side
+
+            # output projection
+            y = self.resid_dropout(self.c_proj(y)) # What does this mean? Are we decoding the tokens back here to the character values?
+
+            return y 
+
+
+class MLP(nn.Module):
+
+
+
+
 
 class LayerNorm(nn.Module):
     """ LayerNorm with optional bias. PyTorch doesn't support simply bias = False"""
 
 
 
-class CausalSelfAttention(nn.Module):
 
-class MLP(nn.Module):
+
+
 
 
 
