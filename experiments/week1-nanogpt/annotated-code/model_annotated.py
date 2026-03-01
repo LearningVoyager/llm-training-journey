@@ -213,136 +213,321 @@ def __init__(self, config):
     ))
 
 
-    # ================================================================
-    # OUTPUT LAYER (self.lm_head)
-    # ================================================================
+        # ================================================================
+        # OUTPUT LAYER (self.lm_head)
+        # ================================================================
 
-    # lm = language model, head = final prediction layer.
-    # This lives OUTSIDE self.transformer.
-    # Full model = self.transformer + self.lm_head. Both are needed.
-    #
-    # After 12 blocks, each token is still a 768-number vector.
-    # That's rich and meaningful but unreadable — you can't extract
-    # "next token" directly from 768 numbers.
-    #
-    # lm_head is a Linear layer: shape (768, 50304)
-    # It converts 768 numbers → 50304 scores (one per vocabulary token)
-    # These scores are called LOGITS.
-    # The highest logit = model's best guess for the next token.
-    #
-    # The full output pipeline:
-    # 768 numbers (rich representation after 12 blocks)
-    #     ↓
-    # lm_head (768 → 50304)
-    #     ↓
-    # 50304 logits (one score per vocabulary token)
-    #     ↓
-    # softmax → probabilities
-    #     ↓
-    # highest probability = predicted next token
-    self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-
-
-    # ================================================================
-    # WEIGHT TYING
-    # ================================================================
-
-    # This single line makes wte and lm_head share the exact same matrix.
-    #
-    # Intuition: imagine learning a foreign language.
-    # A bad student builds two separate mental dictionaries:
-    #   Reading dictionary  → when I see a word, what does it mean?
-    #   Writing dictionary  → when I want to express an idea, which word?
-    # These two drift apart. They recognize "melancholy" but never use it.
-    #
-    # A good student uses ONE unified dictionary for both reading and writing.
-    # True understanding of a word = you can both recognize it AND use it.
-    #
-    # wte    = reading dictionary (token ID → 768 vector, at the START)
-    # lm_head = writing dictionary (768 vector → token scores, at the END)
-    #
-    # They do opposite jobs but are fundamentally about the same thing:
-    # understanding tokens. So we force them to share one matrix.
-    #
-    # Benefits:
-    # 1. Saves ~40 million parameters (50304 × 768)
-    # 2. Forces consistency — how the model reads tokens at input
-    #    must match how it predicts tokens at output
-    #
-    # When training updates wte, lm_head automatically updates too.
-    # They are literally the same numbers in the same memory location.
-    self.transformer.wte.weight = self.lm_head.weight
+        # lm = language model, head = final prediction layer.
+        # This lives OUTSIDE self.transformer.
+        # Full model = self.transformer + self.lm_head. Both are needed.
+        #
+        # After 12 blocks, each token is still a 768-number vector.
+        # That's rich and meaningful but unreadable — you can't extract
+        # "next token" directly from 768 numbers.
+        #
+        # lm_head is a Linear layer: shape (768, 50304)
+        # It converts 768 numbers → 50304 scores (one per vocabulary token)
+        # These scores are called LOGITS.
+        # The highest logit = model's best guess for the next token.
+        #
+        # The full output pipeline:
+        # 768 numbers (rich representation after 12 blocks)
+        #     ↓
+        # lm_head (768 → 50304)
+        #     ↓
+        # 50304 logits (one score per vocabulary token)
+        #     ↓
+        # softmax → probabilities
+        #     ↓
+        # highest probability = predicted next token
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
 
-    # ================================================================
-    # WEIGHT INITIALIZATION
-    # ================================================================
+        # ================================================================
+        # WEIGHT TYING
+        # ================================================================
 
-    # self.apply() is a PyTorch method that walks through EVERY layer
-    # in the model and calls the given function on each one.
-    # So this says: "run _init_weights on every Linear and Embedding layer."
+        # This single line makes wte and lm_head share the exact same matrix.
+        #
+        # Intuition: imagine learning a foreign language.
+        # A bad student builds two separate mental dictionaries:
+        #   Reading dictionary  → when I see a word, what does it mean?
+        #   Writing dictionary  → when I want to express an idea, which word?
+        # These two drift apart. They recognize "melancholy" but never use it.
+        #
+        # A good student uses ONE unified dictionary for both reading and writing.
+        # True understanding of a word = you can both recognize it AND use it.
+        #
+        # wte    = reading dictionary (token ID → 768 vector, at the START)
+        # lm_head = writing dictionary (768 vector → token scores, at the END)
+        #
+        # They do opposite jobs but are fundamentally about the same thing:
+        # understanding tokens. So we force them to share one matrix.
+        #
+        # Benefits:
+        # 1. Saves ~40 million parameters (50304 × 768)
+        # 2. Forces consistency — how the model reads tokens at input
+        #    must match how it predicts tokens at output
+        #
+        # When training updates wte, lm_head automatically updates too.
+        # They are literally the same numbers in the same memory location.
+        self.transformer.wte.weight = self.lm_head.weight
+
+
+        # ================================================================
+        # WEIGHT INITIALIZATION
+        # ================================================================
+
+        # self.apply() is a PyTorch method that walks through EVERY layer
+        # in the model and calls the given function on each one.
+        # So this says: "run _init_weights on every Linear and Embedding layer."
+        #
+        # _init_weights sets all weights to small random numbers:
+        # Linear weights  → random, mean=0, std=0.02
+        # Linear biases   → all zeros
+        # Embedding weights → random, mean=0, std=0.02
+        #
+        # Why these specific numbers? Small random weights (std=0.02) are
+        # known to work well for transformer training. Not too large
+        # (causes exploding gradients) and not too small (causes vanishing
+        # gradients). This is the GPT-2 paper's recommended starting point.
+        self.apply(self._init_weights)  # single underscore, not double
+
+
+        # ================================================================
+        # SPECIAL SMALLER INIT FOR RESIDUAL PROJECTIONS
+        # ================================================================
+
+        # Residual connections: every block does x = x + attention(x)
+        # and x = x + mlp(x). With 12 blocks, you're adding 24 times total
+        # (2 additions per block × 12 blocks).
+        #
+        # Intuition: imagine 12 people passing a bucket down a line.
+        # Each person adds a splash of water before passing it on.
+        # Normal splash × 24 people = bucket overflows every time.
+        #
+        # The fix: tell everyone upfront — we have 24 splashes happening,
+        # so each person's splash should be divided by √24 so the total
+        # stays reasonable.
+        #
+        # This loop finds every c_proj layer (the output projection at the
+        # end of each block — the layer responsible for what gets added
+        # back in the residual) and initializes its weights smaller:
+        # std = 0.02 / √(2 × n_layer)
+        # The 2× is because each block has 2 residual additions (attn + mlp)
+        # More layers = smaller denominator = smaller initial weights
+        # = accumulation stays controlled throughout training
+        for pn, p in self.named_parameters():
+            if pn.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+
+
+        # ================================================================
+        # SANITY CHECK
+        # ================================================================
+
+        # Count every single learnable number in the model.
+        # Divide by 1 million to express in millions.
+        # For GPT-2 this should print ~124.44M.
+        # If you see a wildly different number, something went wrong
+        # in your architecture — catch it here before training for hours.
+        print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+
+
+    def forward(self, idx, targets=None):
+        """
+        How data flows through the model from raw tokens to prediction.
+
+        Inputs:
+            idx     : token IDs of shape (b, t)
+                      b = batch size (how many sequences at once)
+                      t = sequence length (how many tokens per sequence)
+                      These are your input features — the x in y=f(x)
+
+            targets : correct next-token IDs of shape (b, t), or None
+                      When provided (training): model calculates loss
+                      When None (inference/generation): no correct answer
+                      exists yet — just return the prediction, skip loss
+
+        Outputs:
+            logits  : raw unnormalized scores, shape (b, t, vocab_size)
+                      one score per vocabulary token per position
+                      highest score = model's best guess for next token
+                      NOT yet probabilities — softmax converts them later
+
+            loss    : single number measuring how wrong the predictions were
+                      None during inference (no targets to compare against)
+        """
+
+    device = idx.device  # Grab which device idx lives on (CPU/GPU/MPS)
+                         # Everything created in this function must live
+                         # on the same device or PyTorch crashes
+
+    b, t = idx.size()    # Unpack the two dimensions of idx
+                         # b = batch size (e.g. 32 sequences)
+                         # t = sequence length (e.g. 512 tokens)
+
+    # Safety check: sequence can't be longer than position table has rows
+    # wpe only has block_size rows — can't look up position 1025 if max is 1024
+    assert t <= self.config.block_size, \
+        f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
+    # Create position indices [0, 1, 2, ..., t-1]
+    # These are the row indices we'll use to look up position embeddings
+    # dtype=torch.long because embedding tables require integer indices
+    # device=device so this tensor lives on the same device as everything else
+    pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t,)
+
+
+    # ----------------------------------------------------------------
+    # STEP 1: Build input representations
+    # Combine WHAT each token is with WHERE it sits
+    # ----------------------------------------------------------------
+
+    # TOKEN EMBEDDINGS — WHAT is each token?
+    # Pass token IDs into wte lookup table
+    # Each token ID → grabs its row (768 numbers) from wte
+    # Shape: (b, t, n_embd) — every token in every sequence gets 768 numbers
+    tok_emb = self.transformer.wte(idx)
+
+    # POSITION EMBEDDINGS — WHERE does each token sit?
+    # Pass position indices [0,1,2,...t-1] into wpe lookup table
+    # Each position index → grabs its row (768 numbers) from wpe
+    # NOTE: pos goes in here, NOT idx. idx = token IDs, pos = position numbers
+    # Shape: (t, n_embd) — one position vector per slot, same for all batches
+    # PyTorch broadcasts this to (b, t, n_embd) during the addition below
+    pos_emb = self.transformer.wpe(pos)
+
+    # ADD token + position embeddings, then apply dropout
+    # tok_emb + pos_emb: (b,t,768) + (t,768) → broadcasts to (b,t,768)
+    # Each token now carries both WHAT it is and WHERE it sits in one vector
+    # dropout: randomly zeros out some values during training to prevent
+    # memorization. 0.0 here = no-op, nothing gets zeroed
+    # x is what enters the transformer blocks. Shape: (b, t, n_embd)
+    x = self.transformer.drop(tok_emb + pos_emb)
+
+
+    # ----------------------------------------------------------------
+    # STEP 2: Pass through all 12 transformer blocks
+    # This is the entire deep thinking part of the network
+    # ----------------------------------------------------------------
+
+    # Walk through Block 1, Block 2, ... Block 12 in order
+    # Each block receives the OUTPUT of the previous block — not the original x
+    # x shape never changes: always (b, t, n_embd)
+    # Each block refines and deepens the understanding built by the one before
     #
-    # _init_weights sets all weights to small random numbers:
-    # Linear weights  → random, mean=0, std=0.02
-    # Linear biases   → all zeros
-    # Embedding weights → random, mean=0, std=0.02
-    #
-    # Why these specific numbers? Small random weights (std=0.02) are
-    # known to work well for transformer training. Not too large
-    # (causes exploding gradients) and not too small (causes vanishing
-    # gradients). This is the GPT-2 paper's recommended starting point.
-    self.apply(self._init_weights)  # single underscore, not double
+    # Block 1:  x = block1(x)  → slightly smarter representation
+    # Block 2:  x = block2(x)  → even smarter
+    # ...
+    # Block 12: x = block12(x) → deeply understood representation
+    for block in self.transformer.h:
+        x = block(x)
 
 
-    # ================================================================
-    # SPECIAL SMALLER INIT FOR RESIDUAL PROJECTIONS
-    # ================================================================
+    # ----------------------------------------------------------------
+    # STEP 3: Final LayerNorm
+    # ----------------------------------------------------------------
 
-    # Residual connections: every block does x = x + attention(x)
-    # and x = x + mlp(x). With 12 blocks, you're adding 24 times total
-    # (2 additions per block × 12 blocks).
-    #
-    # Intuition: imagine 12 people passing a bucket down a line.
-    # Each person adds a splash of water before passing it on.
-    # Normal splash × 24 people = bucket overflows every time.
-    #
-    # The fix: tell everyone upfront — we have 24 splashes happening,
-    # so each person's splash should be divided by √24 so the total
-    # stays reasonable.
-    #
-    # This loop finds every c_proj layer (the output projection at the
-    # end of each block — the layer responsible for what gets added
-    # back in the residual) and initializes its weights smaller:
-    # std = 0.02 / √(2 × n_layer)
-    # The 2× is because each block has 2 residual additions (attn + mlp)
-    # More layers = smaller denominator = smaller initial weights
-    # = accumulation stays controlled throughout training
-    for pn, p in self.named_parameters():
-        if pn.endswith('c_proj.weight'):
-            torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
+    # One last recalibration after all 12 blocks
+    # Stabilizes the numbers before lm_head makes its prediction
+    # Same kitchen quality control as before — final check before serving
+    x = self.transformer.ln_f(x)
 
 
-    # ================================================================
-    # SANITY CHECK
-    # ================================================================
+    # ----------------------------------------------------------------
+    # STEP 4: Predict next token (and calculate loss if training)
+    # ----------------------------------------------------------------
 
-    # Count every single learnable number in the model.
-    # Divide by 1 million to express in millions.
-    # For GPT-2 this should print ~124.44M.
-    # If you see a wildly different number, something went wrong
-    # in your architecture — catch it here before training for hours.
-    print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+    if targets is not None:
+        # TRAINING MODE — targets are provided
+        # Run lm_head on ALL t positions — need predictions everywhere for loss
+        # Shape: (b, t, n_embd) → (b, t, vocab_size)
+        logits = self.lm_head(x)
+
+        # Calculate how wrong the predictions were
+        # logits.view(-1, logits.size(-1)):
+        #   (b, t, vocab_size) → (b×t, vocab_size)
+        #   collapse batch+time into one dimension
+        #   every token in every sequence becomes its own row
+        #   e.g. (32, 512, 50304) → (16384, 50304)
+        #
+        # targets.view(-1):
+        #   (b, t) → (b×t,)
+        #   one correct answer per row
+        #   e.g. (32, 512) → (16384,)
+        #
+        # ignore_index=-1:
+        #   some positions have -1 as target meaning "ignore this position"
+        #   used for padding — don't calculate loss for padded slots
+        #
+        # cross_entropy compares each of the 16384 predictions to its
+        # correct answer and returns one single average loss number
+        loss = F.cross_entropy(
+            logits.view(-1, logits.size(-1)),
+            targets.view(-1),
+            ignore_index=-1
+        )
+
+    else:
+        # INFERENCE/GENERATION MODE — no targets provided
+        # Optimization: only run lm_head on the LAST position
+        # We only care about what comes AFTER the final token
+        # Running lm_head on all t positions would waste compute
+        #
+        # x[:, [-1], :] means:
+        #   :     → all batches
+        #   [-1]  → only the last time step (square brackets preserve the dimension)
+        #   :     → all embedding dimensions
+        # Shape: (b, t, n_embd) → (b, 1, n_embd)
+        #
+        # lm_head on (b, 1, n_embd) is t times cheaper than on (b, t, n_embd)
+        # For t=1024 that's 1024x less work just for this one layer
+        logits = self.lm_head(x[:, [-1], :])
+        loss = None
+
+    return logits, loss
+    
+
+    
+         
+
+    def generate():
+        pass
+
+    def _init_weights():
+        pass
+
+    def get_num_parameters():
+        pass
+
+    def configure_optimizer():
+        pass
+
+    def crop_block_size():
+        pass
+
+    def from_pretrained():
+        pass
+    
+    def estimated_mfu():
+        pass
+
 
 
 class LayerNorm(nn.Module):
     """ LayerNorm with optional bias. PyTorch doesn't support simply bias = False"""
+    pass
 
 
 
 class CausalSelfAttention(nn.Module):
+    pass
 
 class MLP(nn.Module):
+    pass
 
 class Block(nn.Module):
+    pass
 
 
