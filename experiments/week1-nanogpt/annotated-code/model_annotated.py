@@ -489,54 +489,95 @@ def __init__(self, config):
     return logits, loss
     
 
-    @torch.no_grad() # Decorator that turns of gradient tracking for everything inside this function
-    def generate():
-        """ 
-        HIGH LEVEL Description: Generates the output or prediction of next token in the sequence
+    @torch.no_grad()
+    # Turns off gradient tracking for this entire function.
+    # During generation we are NOT training — no backprop, no weight updates.
+    # Gradient recording uses memory and compute we don't need here.
+    # Result: faster and lighter generation.
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        """
+        HIGH LEVEL: Generates new tokens one at a time by feeding
+        each prediction back into the model as the next input.
 
-        Detailed Description: I have not written this Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
+        INPUTS:
+            idx            : the prompt — starting seed tokens of shape (b, t)
+                            NOT the training dataset. This is what you give
+                            the model to continue writing from.
+                            Grows by 1 token each iteration of the loop.
 
-        INPUT:
-            - self:
-            - idx : Features that is train dataset
-            - max_new_tokens: how many tokens we need to generate in one go for this function run
-            - temperature = 0.1 # I know this dial helps select the random variability in the predictions of the tokens
-                #What I don't know is that  How it works?
-            - top k: # no idea what this is but if I had to guess I would say that if we had suppose a vocab size of 
-                     # 50204, then there would be 50204 probabilities of the next token that will show up in logits
-                     # we are deciding to output only top 10 or top 20 probabilities
-         """
-        
+            max_new_tokens : how many tokens to generate total.
+                            The loop runs exactly this many times.
+
+            temperature    : controls randomness of predictions.
+                            < 1.0 → more confident, repetitive, safe output
+                            > 1.0 → more random, creative, surprising output
+                            = 1.0 → model's natural behavior (default)
+                            Works by dividing logits before softmax.
+
+            top_k          : only allow the top k most likely tokens to survive.
+                            e.g. top_k=10 → out of 50304 possible tokens,
+                            only the 10 highest-scoring ones get any probability.
+                            Everything else is set to -infinity → 0% chance.
+        """
+
         for _ in range(max_new_tokens):
+            # Run once per token to generate. _ = loop counter unused.
 
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[ :, -self.config.block_size:]
-            # I am guessing that idx.size(1) is the lenght of the block size that is the t dimension
-            # I am also guessing that idx[ :, -self.config.block_size:], what is means by -self.config.block_size : is that 
-            # we are taking the length of the sequence from behind till the length of the block size
+            # SAFETY: crop if sequence has grown longer than position table allows.
+            # idx.size(1) = current sequence length (grows by 1 each loop).
+            # If within limit: use whole sequence.
+            # If over limit: keep only the most recent block_size tokens.
+            # Sliding window — oldest tokens fall off, newest stay.
+            idx_cond = idx if idx.size(1) <= self.config.block_size \
+                        else idx[:, -self.config.block_size:]
 
-            # forward the model to get logits for the index in the sequence
-            logits, _ = self(idx_cond) # I am guessing the self, and outputs automatically call forward() here
+            # Run the full forward pass to get logits.
+            # self(idx_cond) automatically calls forward().
+            # In inference mode forward() returns (logits, None).
+            # _ discards the None loss — not needed during generation.
+            logits, _ = self(idx_cond)
 
-            # pluck the logits at the final step and scale by desired temperature # What does plucking the logits at final step mean?
-            logits = logits[ :, -1, :] / temperature # What do we mean by final step here? Can I visualize this using a small dataset or matrix
+            # GRAB ONLY THE LAST POSITION'S LOGITS AND APPLY TEMPERATURE.
+            # [:, -1, :] = all batches, last token position, all vocab scores.
+            # Last position = what comes after the final token we have.
+            # All other positions predict after earlier tokens — useless here.
+            # Dividing by temperature controls confidence vs randomness.
+            # shape after: (b, vocab_size)
+            logits = logits[:, -1, :] / temperature
 
-            # optionally crop the logits to only the top k options
+            # TOP-K FILTERING (optional).
             if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1))) # I am guessing v here is the final value that we get
+                # Get the top k scores. min() ensures we never ask for
+                # more tokens than the vocabulary contains.
+                # v = top k values, _ = their indices (discarded).
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+
+                # v[:, [-1]] = the smallest score among the top k = threshold.
+                # Everything below the threshold → -infinity → 0% after softmax.
+                # Only the top k tokens survive with any probability.
                 logits[logits < v[:, [-1]]] = -float('Inf')
 
-            # Apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim = -1)
+            # CONVERT LOGITS TO PROBABILITIES.
+            # softmax turns raw scores into values that sum to 1.0.
+            # dim=-1 = apply across vocabulary dimension.
+            probs = F.softmax(logits, dim=-1)
 
-            # Sample from the distribution 
-            idx_next = torch.multinomial(probs, num_samples = 1) # What is happening here? Can we visualize with a small matrix or data example
+            # SAMPLE ONE TOKEN FROM THE PROBABILITY DISTRIBUTION.
+            # Weighted random draw — not always the highest score.
+            # Sampling introduces controlled randomness so output
+            # feels natural and varied rather than robotic and repetitive.
+            # Temperature + top_k together shape how this sampling behaves.
+            idx_next = torch.multinomial(probs, num_samples=1)  # shape (b, 1)
 
-            # Append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim = 1)
+            # APPEND NEW TOKEN AND LOOP AGAIN.
+            # Join along sequence dimension: (b, t) + (b, 1) → (b, t+1).
+            # This growing sequence feeds back into the top of the loop.
+            # The model uses its own output as the next input —
+            # this is called AUTOREGRESSIVE generation.
+            idx = torch.cat((idx, idx_next), dim=1)
 
+        # Return original prompt + all generated tokens.
+        # Shape: (b, original_t + max_new_tokens)
         return idx
 
         
