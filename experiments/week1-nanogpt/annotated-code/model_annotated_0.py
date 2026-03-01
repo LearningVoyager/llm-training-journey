@@ -8,7 +8,13 @@ Everything: Everything — attention, MLP, residuals, LayerNorm — is just
 
 
 # Import the necessary class libraries
+import math
+import inspect
 from dataclasses import dataclass
+
+import torch
+import torch.nn as nn
+from torch.nn import functional as F
 
 
 @dataclass  # Python shortcut that auto-generates __init__ # Without this, you'd have to manually write self.block_size = block_size for every single field
